@@ -1,41 +1,60 @@
 #!/bin/bash
+set -e
 
-set -euo pipefail
+echo "💥 WARNING: This will overwrite data on /dev/sda"
+read -p "Type YES to proceed: " confirm
+[[ "$confirm" != "YES" ]] && exit 1
 
-echo "[+] Scanning sdd partitions..."
-BOOT_EFI_UUID=$(blkid -t TYPE=vfat -s UUID -o value /dev/sdd1)
-BOOT_UUID=$(blkid -t TYPE=ext4 -s UUID -o value /dev/sdd2)
-ROOT_UUID=$(blkid -t TYPE=ext4 -s UUID -o value /dev/sdd3)
+# 1. Partition sda to match sdb layout
+sgdisk -Z /dev/sda  # Zap old partitions
+sgdisk -n1:0:+200M -t1:ef00 -c1:"EFI System" \
+       -n2:0:+500M -t2:8300 -c2:"/boot" \
+       -n3:0:0     -t3:8e00 -c3:"LVM" \
+       /dev/sda
 
-echo "[+] Mounting /dev/sdd3 as /mnt..."
-mount /dev/sdd3 /mnt
-mount /dev/sdd2 /mnt/boot
-mount /dev/sdd1 /mnt/boot/efi
+# 2. Format EFI and /boot partitions
+mkfs.fat -F32 /dev/sda1
+mkfs.ext4 /dev/sda2
 
-echo "[+] Binding system directories..."
-for d in dev proc sys run; do
-  mount --bind /$d /mnt/$d
-done
+# 3. Setup LVM on sda3
+pvcreate /dev/sda3
+vgcreate rootvg /dev/sda3
+lvcreate -L 2G   -n tmplv rootvg
+lvcreate -L 15G  -n usrlv rootvg
+lvcreate -L 20G  -n homelv rootvg
+lvcreate -L 10G  -n varlv rootvg
+lvcreate -l 100%FREE -n rootlv rootvg
 
-echo "[+] Entering chroot..."
-chroot /mnt /bin/bash <<'EOC'
+mkfs.ext4 /dev/rootvg/tmplv
+mkfs.ext4 /dev/rootvg/usrlv
+mkfs.ext4 /dev/rootvg/homelv
+mkfs.ext4 /dev/rootvg/varlv
+mkfs.ext4 /dev/rootvg/rootlv
 
-echo "[+] Reinstalling GRUB to EFI on /dev/sdd1..."
-grub2-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=redhat --recheck --no-nvram
+# 4. Mount target system
+mount /dev/rootvg/rootlv /mnt
+mkdir -p /mnt/{boot,boot/efi,home,tmp,usr,var}
+mount /dev/sda2 /mnt/boot
+mount /dev/sda1 /mnt/boot/efi
+mount /dev/rootvg/homelv /mnt/home
+mount /dev/rootvg/tmplv /mnt/tmp
+mount /dev/rootvg/usrlv /mnt/usr
+mount /dev/rootvg/varlv /mnt/var
 
-echo "[+] Generating new grub.cfg..."
-grub2-mkconfig -o /boot/grub2/grub.cfg
+# 5. Copy everything from current system (sdb) to /mnt
+rsync -aAXv / --exclude={"/dev/*","/proc/*","/sys/*","/tmp/*","/run/*","/mnt/*","/media/*","/lost+found"} /mnt
 
-echo "[+] Copying fallback BOOTX64.EFI..."
-mkdir -p /boot/efi/EFI/BOOT
-cp /boot/efi/EFI/redhat/grubx64.efi /boot/efi/EFI/BOOT/BOOTX64.EFI
+# 6. Bind mount and chroot
+for dir in dev proc sys run; do mount --bind /$dir /mnt/$dir; done
+chroot /mnt /bin/bash << 'EOF'
+grub2-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=RHEL --recheck
+grub2-mkconfig -o /boot/efi/EFI/RHEL/grub.cfg
+dracut --regenerate-all --force
+exit
+EOF
 
-echo "[+] Creating EFI boot entry..."
-efibootmgr -c -d /dev/sdd -p 1 -L "RHEL-Fixed" -l '\EFI\redhat\grubx64.efi'
+# 7. Unmount everything
+for dir in run sys proc dev; do umount -lf /mnt/$dir; done
+umount -R /mnt
 
-EOC
-
-echo "[+] Listing EFI boot entries..."
-efibootmgr -v
-
-echo "[+] Done. You may now unmount and reboot."
+echo "✅ Migration complete. Set BIOS to boot from sda and reboot."
