@@ -1,61 +1,72 @@
 #!/bin/bash
 set -euo pipefail
 
-echo "🔍 Dracut Validation: Checking environment for safe initramfs regeneration"
-echo
+echo "🔍 Dracut Validation and Regeneration Script"
 
-# 1. Verify kernel module directories exist
-echo "📁 Kernel module directories under /lib/modules:"
+# 1. Verify /lib/modules exists
+echo
+echo "📁 Checking /lib/modules..."
 if [[ ! -d /lib/modules ]]; then
-  echo "❌ /lib/modules not found — you're not in a proper system or chroot."
+  echo "❌ /lib/modules not found — are you in chroot or missing kernel modules?"
   exit 1
 fi
 
 kernel_versions=$(ls -1 /lib/modules | sort -V)
 latest_kernel=$(echo "$kernel_versions" | tail -n1)
 echo "$kernel_versions" | sed 's/^/  └─ /'
-echo "✅ Latest detected kernel: $latest_kernel"
+echo "✅ Latest kernel: $latest_kernel"
 echo
 
-# 2. Check for kernel and initramfs in /boot
-echo "📂 Verifying /boot contents for matching kernel/initramfs..."
-vmlinuz_path="/boot/vmlinuz-$latest_kernel"
-initramfs_path="/boot/initramfs-$latest_kernel.img"
+# 2. Check /boot kernel and initramfs
+vmlinuz="/boot/vmlinuz-$latest_kernel"
+initramfs="/boot/initramfs-$latest_kernel.img"
 
-[[ -f "$vmlinuz_path" ]] && echo "✅ Found kernel: $vmlinuz_path" || echo "❌ MISSING: $vmlinuz_path"
-[[ -f "$initramfs_path" ]] && echo "✅ Found initramfs: $initramfs_path" || echo "⚠️ MISSING: $initramfs_path"
+echo "📂 Checking /boot files:"
+[[ -f "$vmlinuz" ]] && echo "✅ $vmlinuz found" || { echo "❌ $vmlinuz missing"; exit 1; }
+[[ -f "$initramfs" ]] && echo "✅ $initramfs found" || echo "⚠️ $initramfs missing (will be regenerated)"
 echo
 
-# 3. Validate chroot environment (basic mounts)
-echo "🔗 Verifying critical system mounts inside chroot:"
+# 3. Required mount points
+echo "🔗 Validating chroot mount points:"
+MOUNTS_OK=true
 for d in /proc /sys /dev /run; do
   if mountpoint -q "$d"; then
     echo "✅ $d is mounted"
   else
-    echo "❌ $d is NOT mounted — bind-mount it before running dracut"
+    echo "❌ $d is not mounted"
+    MOUNTS_OK=false
   fi
 done
-echo
 
-# 4. Confirm dracut availability
-echo "📦 Verifying dracut availability:"
-if ! command -v dracut >/dev/null 2>&1; then
-  echo "❌ dracut not found in this environment"
+if [[ "$MOUNTS_OK" == false ]]; then
+  echo "💣 Missing required system mounts — please bind /proc, /sys, /dev, /run"
   exit 1
 fi
+
+# 4. Check dracut availability
+echo
+echo "📦 Checking for dracut..."
+if ! command -v dracut &>/dev/null; then
+  echo "❌ dracut not found — install it in this environment"
+  exit 1
+fi
+
 dracut --version
 echo
 
-# 5. Dry-run dracut to validate functionality
-echo "🧪 Performing DRY-RUN initramfs generation check..."
-dryrun_path="/tmp/initramfs-dryrun.img"
-if dracut --dry-run --force "$dryrun_path" "$latest_kernel"; then
-  echo "✅ Dry-run successful — dracut is working correctly"
+# 5. Run dry-run check
+echo "🧪 Running dry-run to validate dracut build..."
+if dracut --dry-run --force /tmp/initramfs-dryrun.img "$latest_kernel"; then
+  echo "✅ Dry-run successful"
 else
-  echo "❌ Dracut dry-run failed — possible missing modules or broken kernel"
+  echo "❌ Dry-run failed — aborting"
   exit 1
 fi
 echo
 
-echo "🎯 Ready to regenerate all initramfs images:"
-echo "    dracut --regenerate-all --force -v"
+# 6. Run actual regeneration
+echo "⚙️ Regenerating all initramfs images..."
+dracut --regenerate-all --force -v
+
+echo
+echo "🎉 Done: All initramfs images regenerated successfully."
