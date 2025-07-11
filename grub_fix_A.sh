@@ -1,19 +1,21 @@
 #!/bin/bash
 set -euo pipefail
 
+BOOTID="RHEL_new"
+
 echo "🔍 Mounting /boot/efi if needed..."
-mount | grep /boot/efi || mount /dev/sda1 /boot/efi
+mount | grep -q /boot/efi || mount /dev/sda1 /boot/efi
 
 echo "📁 Ensuring EFI directory exists..."
-ls -l /boot/efi/EFI/RHEL || mkdir -p /boot/efi/EFI/RHEL
+mkdir -p "/boot/efi/EFI/$BOOTID"
 
-echo "⚙️ Installing GRUB bootloader..."
+echo "⚙️ Installing GRUB with bootloader ID: $BOOTID"
 grub2-install --target=x86_64-efi \
   --efi-directory=/boot/efi \
-  --bootloader-id=RHEL \
+  --bootloader-id="$BOOTID" \
   --recheck --no-nvram --force
 
 echo "🛠 Rebuilding GRUB configuration..."
-grub2-mkconfig -o /boot/efi/EFI/RHEL/grub.cfg
+grub2-mkconfig -o "/boot/efi/EFI/$BOOTID/grub.cfg"
 
-echo "✅ GRUB install complete and config regenerated."
+echo "✅ GRUB installed as $BOOTID and config written to /boot/efi/EFI/$BOOTID/grub.cfg"
