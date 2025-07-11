@@ -1,0 +1,43 @@
+Azure disk enumeration nondeterminism
+
+🔥 The Root Cause
+Azure assigns virtual SCSI devices dynamically, and /dev/sdX names depend on:
+
+The order Linux detects disks
+
+OS boot race conditions
+
+Hotplug timing
+
+That means:
+
+/dev/sda might be your OS disk today
+
+But it could become /dev/sdb or /dev/sdd after a reboot or image redeploy
+
+✅ The Correct Fix: Always Use UUID or LVM/VG Names
+✅ 1. Use UUID= in /etc/fstab
+You must not rely on /dev/sdX in /etc/fstab or grub.cfg.
+
+Instead, use:
+
+bash
+Copy
+Edit
+UUID=abc123...  /       ext4   defaults  0 1
+UUID=def456...  /boot   ext4   defaults  0 2
+Get UUIDs via:
+
+bash
+Copy
+Edit
+blkid
+✅ 2. Use /dev/disk/by-id/ or /dev/disk/by-uuid/ for scripting and automation
+These are stable and mapped by Azure’s disk metadata:
+
+bash
+Copy
+Edit
+ls -l /dev/disk/by-id/
+ls -l /dev/disk/by-uuid/
+You can use these in GRUB, fstab, or any automation.
