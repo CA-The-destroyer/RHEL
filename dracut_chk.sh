@@ -1,72 +1,50 @@
 #!/bin/bash
 set -euo pipefail
 
-echo "🔍 Dracut Validation and Regeneration Script"
+echo "🔍 Have you mounted the correct points (/, /boot, /boot/efi, dev, proc, sys, run)?"
+read -rp "→ Type yes to continue: " confirm
 
-# 1. Verify /lib/modules exists
-echo
-echo "📁 Checking /lib/modules..."
-if [[ ! -d /lib/modules ]]; then
-  echo "❌ /lib/modules not found — are you in chroot or missing kernel modules?"
+if [[ "$confirm" != "yes" ]]; then
+  echo "❌ Mount points not confirmed. Exiting."
   exit 1
 fi
 
-kernel_versions=$(ls -1 /lib/modules | sort -V)
-latest_kernel=$(echo "$kernel_versions" | tail -n1)
-echo "$kernel_versions" | sed 's/^/  └─ /'
-echo "✅ Latest kernel: $latest_kernel"
-echo
+echo "✅ Proceeding with initramfs validation..."
 
-# 2. Check /boot kernel and initramfs
-vmlinuz="/boot/vmlinuz-$latest_kernel"
-initramfs="/boot/initramfs-$latest_kernel.img"
+# Detect latest kernel
+KERNEL_VER=$(ls /lib/modules | sort -V | tail -n1)
+echo "→ Kernel detected: $KERNEL_VER"
 
-echo "📂 Checking /boot files:"
-[[ -f "$vmlinuz" ]] && echo "✅ $vmlinuz found" || { echo "❌ $vmlinuz missing"; exit 1; }
-[[ -f "$initramfs" ]] && echo "✅ $initramfs found" || echo "⚠️ $initramfs missing (will be regenerated)"
-echo
-
-# 3. Required mount points
-echo "🔗 Validating chroot mount points:"
-MOUNTS_OK=true
-for d in /proc /sys /dev /run; do
-  if mountpoint -q "$d"; then
-    echo "✅ $d is mounted"
-  else
-    echo "❌ $d is not mounted"
-    MOUNTS_OK=false
-  fi
-done
-
-if [[ "$MOUNTS_OK" == false ]]; then
-  echo "💣 Missing required system mounts — please bind /proc, /sys, /dev, /run"
-  exit 1
-fi
-
-# 4. Check dracut availability
-echo
-echo "📦 Checking for dracut..."
-if ! command -v dracut &>/dev/null; then
-  echo "❌ dracut not found — install it in this environment"
-  exit 1
-fi
-
-dracut --version
-echo
-
-# 5. Run dry-run check
-echo "🧪 Running dry-run to validate dracut build..."
-if dracut --dry-run --force /tmp/initramfs-dryrun.img "$latest_kernel"; then
-  echo "✅ Dry-run successful"
+# Check if initramfs exists
+INITRAMFS_PATH="/boot/initramfs-${KERNEL_VER}.img"
+if [[ -f "$INITRAMFS_PATH" ]]; then
+  echo "✅ Found existing initramfs: $INITRAMFS_PATH"
 else
-  echo "❌ Dry-run failed — aborting"
-  exit 1
+  echo "⚠️ No initramfs found for $KERNEL_VER. Will create new one."
 fi
-echo
 
-# 6. Run actual regeneration
-echo "⚙️ Regenerating all initramfs images..."
-dracut --regenerate-all --force -v
+# Rebuild initramfs with LVM and DM support
+echo "🛠 Rebuilding initramfs with LVM support..."
+dracut -f --add lvm --add-drivers "dm-mod" "$INITRAMFS_PATH" "$KERNEL_VER" -v
 
-echo
-echo "🎉 Done: All initramfs images regenerated successfully."
+# Validate root UUID
+ROOT_DEV="/dev/mapper/rootvg_new-rootlv"
+if [[ ! -e "$ROOT_DEV" ]]; then
+  echo "❌ Root logical volume not found: $ROOT_DEV"
+  exit 2
+fi
+
+ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV")
+echo "→ Root UUID: $ROOT_UUID"
+
+GRUB_CFG="/boot/efi/EFI/RHEL_new/grub.cfg"
+echo "🔍 Checking GRUB config at $GRUB_CFG"
+
+if grep -q "$ROOT_UUID" "$GRUB_CFG"; then
+  echo "✅ GRUB config already uses correct root UUID."
+else
+  echo "❌ GRUB config does NOT reference correct root UUID. Regenerating..."
+  grub2-mkconfig -o "$GRUB_CFG"
+fi
+
+echo "✅ All done. You may now exit chroot and reboot."
