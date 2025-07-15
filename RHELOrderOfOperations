@@ -1,0 +1,87 @@
+RHEL Order-of-Operation Map
+Step	Component	Minimal artifacts	Handoff to…
+1	BIOS/UEFI	Boot device table	GRUB2
+2	GRUB2 Stage 1/2	/boot/grub2/grub.cfg
+vmlinuz-<ver>
+initramfs-<ver>.img	Kernel + initramfs
+3	Kernel	Built-in drivers	initramfs /init
+4	initramfs	/init, essential modules to mount real root	pivot_root → real root /
+5	Real root filesystem	/sbin/init (→ systemd), /lib/modules or built-ins	systemd
+6	systemd (PID 1)	/etc/systemd/*.service, /etc/fstab	Userspace services & targets
+7	Userspace services	Network, getty, SSH, etc.	Fully-functional OS session
+
+Min viable
+Key “absolute minimum” files & their roles
+
+/boot/vmlinuz-<ver>: the compressed Linux kernel
+
+/boot/initramfs-<ver>.img: tiny RAM-disk with only core tools/modules for mounting /
+
+/boot/grub2/grub.cfg (BIOS) or EFI stub config: tells GRUB which kernel/initramfs and parameters to load
+
+/sbin/init (→ systemd): first userspace process to fully bring up the system
+
+Details
+Power‐on & firmware
+
+BIOS/UEFI initializes hardware and reads the boot device table
+
+Locates a valid bootloader on MBR (BIOS) or EFI System Partition (UEFI)
+
+Bootloader (GRUB2)
+
+Stage 1 (in MBR or EFI stub) → loads Stage 2 from /boot/grub2 (BIOS) or EFI partition
+
+Configuration: /boot/grub2/grub.cfg (BIOS) or /boot/efi/EFI/redhat/grub.cfg (UEFI)
+
+Minimal files:
+
+/boot/vmlinuz-<version> (the kernel)
+
+/boot/initramfs-<version>.img (the initramfs)
+
+Kernel + initramfs
+
+GRUB loads vmlinuz and initramfs into memory and passes control
+
+Kernel decompression and basic driver setup
+
+initramfs (/init) must contain only what’s needed to:
+
+discover and mount the real root filesystem (e.g. by UUID/device)
+
+pivot_root (or switch_root) into the real root
+
+Real root filesystem
+
+Kernel mounts the root (/) read-only, then pivot_root swaps to it
+
+Minimum bits on /:
+
+/sbin/init (usually a symlink to systemd)
+
+critical libraries for systemd and any kernel modules not built-in
+
+/lib/modules/<version>/ or built-in drivers for remaining hardware
+
+init (systemd)
+
+The kernel execs /sbin/init (PID 1)
+
+systemd loads its configuration (/etc/systemd/system/*.target)
+
+Brings up:
+
+/proc, /sys, /dev (via systemd-udevd)
+
+mounts any other filesystems (/etc/fstab)
+
+starts the default target (multi-user.target)
+
+Userspace services
+
+Network (network.service or NetworkManager.service)
+
+Login services (sshd.service, getty@tty*.service`)
+
+Any other daemons
