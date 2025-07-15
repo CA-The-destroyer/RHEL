@@ -1,4 +1,4 @@
-RHEL Order-of-Operation Map
+*RHEL Order-of-Operation Map*
 Step	Component	Minimal artifacts	Handoff to…
 1	BIOS/UEFI	Boot device table	GRUB2
 2	GRUB2 Stage 1/2	/boot/grub2/grub.cfg
@@ -10,7 +10,7 @@ initramfs-<ver>.img	Kernel + initramfs
 6	systemd (PID 1)	/etc/systemd/*.service, /etc/fstab	Userspace services & targets
 7	Userspace services	Network, getty, SSH, etc.	Fully-functional OS session
 
-Min viable
+*Min viable*
 Key “absolute minimum” files & their roles
 
 /boot/vmlinuz-<ver>: the compressed Linux kernel
@@ -21,7 +21,7 @@ Key “absolute minimum” files & their roles
 
 /sbin/init (→ systemd): first userspace process to fully bring up the system
 
-Details
+*Details*
 Power‐on & firmware
 
 BIOS/UEFI initializes hardware and reads the boot device table
