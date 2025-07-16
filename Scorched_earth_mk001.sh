@@ -17,7 +17,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# ─── Defaults & Option Parsing ─────────────────────────────────────────────────
+# ─── Defaults & Option Parsing ────────────────────────────────────────────────
 DRY_RUN=0
 UEFI_ONLY=0
 BIOS_ONLY=0
@@ -47,12 +47,12 @@ run() {
   fi
 }
 
-# Snapshot original EFI BootOrder
+# Snapshot original EFI BootOrder (for later reordering)
 if [[ $BIOS_ONLY -eq 0 ]]; then
   ORIGINAL_ORDER=$(efibootmgr | grep '^BootOrder:' | awk '{print $2}') || ORIGINAL_ORDER=""
 fi
 
-# ─── 1) Confirmation & Wipe ─────────────────────────────────────────────────────
+# ─── 1) Confirmation & Wipe ───────────────────────────────────────────────────
 echo "💥 WARNING: This will wipe all partitions on ${DEVICE}."
 read -rp "Type YES to proceed: " confirm
 [[ $confirm != YES ]] && { echo "Aborted."; exit 1; }
@@ -61,21 +61,21 @@ echo "🔧 1) Wiping existing partitions on ${DEVICE}..."
 run sgdisk --zap-all "$DEVICE"
 run wipefs -a "$DEVICE"
 
-# ─── 2) Partitioning ─────────────────────────────────────────────────────────────
-echo "🔧 2) Creating EFI, /boot, BIOS-Boot & LVM partitions..."
+# ─── 2) Partitioning ───────────────────────────────────────────────────────────
+echo "🔧 2) Creating EFI, BIOS-Boot, /boot & LVM partitions..."
 run sgdisk \
   --new=1:0:+200M  --typecode=1:ef00 --change-name=1:"EFI System" \
-  --new=2:0:+10G   --typecode=2:8300 --change-name=2:"boot" \
-  --new=3:0:+1M    --typecode=3:ef02 --change-name=3:"BIOS Boot" \
-  --new=4:0:0      --typecode=4:8e00 --change-name=4:"LVM" \
+  --new=2:0:+1M     --typecode=2:ef02 --change-name=2:"BIOS Boot" \
+  --new=3:0:+10G    --typecode=3:8300 --change-name=3:"boot" \
+  --new=4:0:0       --typecode=4:8e00 --change-name=4:"LVM" \
   "$DEVICE"
 
-# ─── 3) Formatting ──────────────────────────────────────────────────────────────
+# ─── 3) Formatting ─────────────────────────────────────────────────────────────
 echo "🧹 3) Formatting partitions..."
 run mkfs.fat -F32 "${DEVICE}1"
-run mkfs.ext4   "${DEVICE}2"
+run mkfs.ext4 "${DEVICE}3"
 
-# ─── 4) LVM Setup ───────────────────────────────────────────────────────────────
+# ─── 4) LVM Setup ─────────────────────────────────────────────────────────────
 echo "🧱 4) Setting up LVM on ${DEVICE}4..."
 if vgdisplay "$VG_NAME" &> /dev/null; then
   echo "❌ Volume group $VG_NAME already exists. Remove it or choose another VG_NAME."; exit 1
@@ -83,7 +83,7 @@ fi
 run pvcreate --yes --force "${DEVICE}4"
 run vgcreate "$VG_NAME" "${DEVICE}4"
 
-# ─── 5) LV Creation ─────────────────────────────────────────────────────────────
+# ─── 5) LV Creation ────────────────────────────────────────────────────────────
 echo "📦 5) Creating logical volumes..."
 for spec in tmplv:2G usrlv:15G homelv:20G varlv:10G rootlv:100%FREE; do
   IFS=':' read -r lv sz <<< "$spec"
@@ -94,17 +94,17 @@ for spec in tmplv:2G usrlv:15G homelv:20G varlv:10G rootlv:100%FREE; do
   fi
 done
 
-# ─── 6) Formatting LVs ──────────────────────────────────────────────────────────
+# ─── 6) Formatting LVs ─────────────────────────────────────────────────────────
 echo "🧷 6) Formatting logical volumes..."
 for lv in tmplv usrlv homelv varlv rootlv; do
   run mkfs.ext4 "/dev/${VG_NAME}/${lv}"
 done
 
-# ─── 7) Mounting ─────────────────────────────────────────────────────────────────
+# ─── 7) Mounting ───────────────────────────────────────────────────────────────
 echo "📂 7) Mounting target filesystem under ${MOUNTPOINT}..."
 [[ $DRY_RUN -eq 0 ]] && run mount "/dev/${VG_NAME}/rootlv" "$MOUNTPOINT"
 run mkdir -p "$MOUNTPOINT"/boot
-[[ $DRY_RUN -eq 0 ]] && run mount "${DEVICE}2" "$MOUNTPOINT/boot"
+[[ $DRY_RUN -eq 0 ]] && run mount "${DEVICE}3" "$MOUNTPOINT/boot"
 run mkdir -p "$MOUNTPOINT"/boot/efi
 [[ $DRY_RUN -eq 0 ]] && run mount "${DEVICE}1" "$MOUNTPOINT/boot/efi"
 
@@ -116,7 +116,7 @@ done
 # ─── 8) /etc/fstab Generation ─────────────────────────────────────────────────
 echo "📋 8) Generating /etc/fstab on new root..."
 EFI_UUID=$(blkid -s UUID -o value "${DEVICE}1")  || { echo "❌ Can't read UUID of ${DEVICE}1"; exit 1; }
-BOOT_UUID=$(blkid -s UUID -o value "${DEVICE}2") || { echo "❌ Can't read UUID of ${DEVICE}2"; exit 1; }
+BOOT_UUID=$(blkid -s UUID -o value "${DEVICE}3") || { echo "❌ Can't read UUID of ${DEVICE}3"; exit 1; }
 declare -A LV_UUID
 for lv in rootlv tmplv usrlv homelv varlv; do
   u=$(blkid -s UUID -o value "/dev/${VG_NAME}/${lv}") || { echo "❌ Can't read UUID of /dev/${VG_NAME}/${lv}"; exit 1; }
@@ -153,8 +153,8 @@ if [[ $DRY_RUN -eq 1 ]]; then
 else
   chroot "$MOUNTPOINT" /usr/bin/env bash -eux <<EOF
 mount -a
-[[ \\$BIOS_ONLY -eq 0 ]] && grub2-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=RHEL --recheck --debug
-[[ \\$UEFI_ONLY -eq 0 ]] && grub2-install --target=i386-pc --boot-directory=/boot/grub2 --recheck /dev/sda
+[[ \$BIOS_ONLY -eq 0 ]] && grub2-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=RHEL --recheck --debug
+[[ \$UEFI_ONLY -eq 0 ]] && grub2-install --target=i386-pc --boot-directory=/boot/grub2 --recheck /dev/sda
 grub2-mkconfig -o /boot/efi/EFI/RHEL/grub.cfg
 dracut --regenerate-all --force
 restorecon -Rv /
@@ -173,7 +173,8 @@ echo "🔽 13) Unmounting everything..."
 cleanup
 
 echo "✅ Migration + GRUB setup complete."
-echo "\n👉 After reboot, verify:
+echo "
+👉 After reboot, verify:
    mountpoint -q /            && echo '/ OK'
    mountpoint -q /boot        && echo '/boot OK'
    lsblk -f | grep ${VG_NAME} && echo 'LVM OK'
