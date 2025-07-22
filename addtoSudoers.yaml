@@ -1,0 +1,17 @@
+---
+- name: Add parameterized user to wheel group
+  hosts: your_rhel_hosts
+  become: true
+
+  vars:
+    # default user—override via -e sudo_user=jdoe
+    sudo_user: notarealuser
+
+  tasks:
+    - name: Ensure {{ sudo_user }} is a member of wheel
+      user:
+        name: "{{ sudo_user }}"
+        groups: wheel
+        append: yes
+
+
